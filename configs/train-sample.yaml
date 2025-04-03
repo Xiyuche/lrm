@@ -23,10 +23,10 @@ dataset:
     subsets:
         -   name: objaverse
             root_dirs:
-                - <REPLACE_WITH_RENDERING_ROOT>
+                - dataset/Objaverse/rendered
             meta_path:
-                train: <TRAIN_UIDS_IN_JSON>
-                val: <VAL_UIDS_IN_JSON>
+                train: dataset/Objaverse/rendered/train_uids.json
+                val: dataset/Objaverse/rendered/train_uids.json
             sample_rate: 1.0
     sample_side_views: 3
     source_image_res: 224
@@ -56,7 +56,7 @@ train:
     scheduler:
         type: cosine
         warmup_real_iters: 3000
-    batch_size: 16  # REPLACE THIS (PER GPU)
+    batch_size: 24  # REPLACE THIS (PER GPU)
     accum_steps: 1  # REPLACE THIS
     epochs: 60  # REPLACE THIS
     debug_global_steps: null

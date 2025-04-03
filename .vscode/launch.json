@@ -1,0 +1,17 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      
+      {
+        "name": "Debug OpenLRM (no accelerate)",
+        "type": "debugpy",
+        "request": "launch",
+        "module": "openlrm.launch",
+        "args": [
+          "train.lrm",
+          "--config", "./configs/train-sample.yaml"
+        ],
+        "console": "integratedTerminal"
+      }
+    ]
+  }

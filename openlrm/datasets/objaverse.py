@@ -33,7 +33,7 @@ class ObjaverseDataset(BaseDataset):
                  sample_side_views: int,
                  render_image_res_low: int, render_image_res_high: int, render_region_size: int,
                  source_image_res: int, normalize_camera: bool,
-                 normed_dist_to_center: Union[float, str] = None, num_all_views: int = 32):
+                 normed_dist_to_center: Union[float, str] = None, num_all_views: int = 8):
         super().__init__(root_dirs, meta_path)
         self.sample_side_views = sample_side_views
         self.render_image_res_low = render_image_res_low

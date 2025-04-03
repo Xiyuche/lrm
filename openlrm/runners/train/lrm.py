@@ -36,7 +36,7 @@ class LRMTrainer(Trainer):
 
         self.model = self._build_model(self.cfg)
         self.optimizer = self._build_optimizer(self.model, self.cfg)
-        self.train_loader, self.val_loader = self._build_dataloader(self.cfg)
+        self.train_loader, self.val_loader = self._build_dataloader(self.cfg) # need Objaverse to successfull build dataloader
         self.scheduler = self._build_scheduler(self.optimizer, self.cfg)
         self.pixel_loss_fn, self.perceptual_loss_fn, self.tv_loss_fn = self._build_loss_fn(self.cfg)
 

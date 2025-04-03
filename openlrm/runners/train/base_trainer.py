@@ -66,7 +66,7 @@ class Trainer(Runner):
             project_config=ProjectConfiguration(
                 logging_dir=self.cfg.logger.tracker_root,
             ),
-            use_seedable_sampler=True,
+            # use_seedable_sampler=True,  # ← 已注释，避免不兼容错误
             kwargs_handlers=[
                 DistributedDataParallelKwargs(
                     find_unused_parameters=self.cfg.train.find_unused_parameters,
