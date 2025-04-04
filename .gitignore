@@ -53,6 +53,7 @@ Thumbs.db
 # Ignore Huge Dataset files
 dataset/Objaverse/glbs/000-000
 dataset/Objaverse/rendered
+dataset/Objaverse/rendered_backup
 
-#ignore exp Models
-exps/checkpoints
+#ignore experiments
+exps
