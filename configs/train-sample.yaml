@@ -56,13 +56,13 @@ train:
     scheduler:
         type: cosine
         warmup_real_iters: 3000
-    batch_size: 11  # REPLACE THIS (PER GPU)
+    batch_size: 3  # REPLACE THIS (PER GPU)
     accum_steps: 1  # REPLACE THIS
     epochs: 3000  # REPLACE THIS
     debug_global_steps: null
 
 val:
-    batch_size: 4
+    batch_size: 3
     global_step_period: 1000
     debug_batches: null
 

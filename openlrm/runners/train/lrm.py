@@ -43,8 +43,8 @@ class LRMTrainer(Trainer):
     def _build_model(self, cfg):
         assert cfg.experiment.type == 'lrm', \
             f"Config type {cfg.experiment.type} does not match with runner {self.__class__.__name__}"
-        from openlrm.models import ModelLRM
-        model = ModelLRM(**cfg.model)
+        from openlrm.models_lalrm.modeling_lalrm import LaLRM  # 假设用户的模型放在这个位置
+        model = LaLRM() # LaLRM目前不会使用cfg文件
         return model
 
     def _build_optimizer(self, model: nn.Module, cfg):
@@ -173,33 +173,23 @@ class LRMTrainer(Trainer):
         render_bg_colors = data['render_bg_colors']
 
         N, M, C, H, W = render_image.shape
+        B = source_image.shape[0]
+        source_image_fake = torch.randn(B, 13, 60, 90, 16, device=self.device, dtype=source_image.dtype)
+        source_camera_fake = torch.randn(B, 49, 480, 720, 6, device=self.device, dtype=source_camera.dtype)
 
         # forward
-        outputs = self.model(
-            image=source_image,
-            source_camera=source_camera,
-            render_cameras=render_camera,
-            render_anchors=render_anchors,
-            render_resolutions=render_full_resolutions,
-            render_bg_colors=render_bg_colors,
-            render_region_size=self.cfg.dataset.render_image.region,
+        gaussians = self.model(
+            video_latent=source_image_fake,
+            camera_embed=source_camera_fake,
         )
+        outputs = {
+            'gaussians': gaussians
+        }
 
-        # loss calculation
-        loss = 0.
+        loss = torch.norm(gaussians)
         loss_pixel = None
         loss_perceptual = None
         loss_tv = None
-
-        if self.cfg.train.loss.pixel_weight > 0.:
-            loss_pixel = self.pixel_loss_fn(outputs['images_rgb'], render_image)
-            loss += loss_pixel * self.cfg.train.loss.pixel_weight
-        if self.cfg.train.loss.perceptual_weight > 0.:
-            loss_perceptual = self.perceptual_loss_fn(outputs['images_rgb'], render_image)
-            loss += loss_perceptual * self.cfg.train.loss.perceptual_weight
-        if self.cfg.train.loss.tv_weight > 0.: 
-            loss_tv = self.tv_loss_fn(outputs['planes'])
-            loss += loss_tv * self.cfg.train.loss.tv_weight
 
         return outputs, loss, loss_pixel, loss_perceptual, loss_tv
 
@@ -272,7 +262,8 @@ class LRMTrainer(Trainer):
                 if self.global_step % self.cfg.logger.image_monitor.train_global_steps == 0:
                     self.log_image_monitor(
                         step=self.global_step, split='train',
-                        renders=outs['images_rgb'].detach()[:self.cfg.logger.image_monitor.samples_per_log].cpu(),
+                        # renders=outs['images_rgb'].detach()[:self.cfg.logger.image_monitor.samples_per_log].cpu(),
+                        renders=torch.randn_like(data['render_image'][:self.cfg.logger.image_monitor.samples_per_log]).cpu(),
                         gts=data['render_image'][:self.cfg.logger.image_monitor.samples_per_log].cpu(),
                     )
 
@@ -386,7 +377,8 @@ class LRMTrainer(Trainer):
             )
             self.log_image_monitor(
                 epoch=epoch, split='val',
-                renders=sample_outs['images_rgb'][:self.cfg.logger.image_monitor.samples_per_log].cpu(),
+                # renders=sample_outs['images_rgb'][:self.cfg.logger.image_monitor.samples_per_log].cpu(),
+                renders=torch.randn_like(sample_data['render_image'][:self.cfg.logger.image_monitor.samples_per_log]).cpu(), # 随机生成
                 gts=sample_data['render_image'][:self.cfg.logger.image_monitor.samples_per_log].cpu(),
             )
         else:
@@ -400,7 +392,8 @@ class LRMTrainer(Trainer):
             )
             self.log_image_monitor(
                 step=self.global_step, split='val',
-                renders=sample_outs['images_rgb'][:self.cfg.logger.image_monitor.samples_per_log].cpu(),
+                # renders=sample_outs['images_rgb'][:self.cfg.logger.image_monitor.samples_per_log].cpu(),
+                renders=torch.randn_like(sample_data['render_image'][:self.cfg.logger.image_monitor.samples_per_log]).cpu(), # 随机生成
                 gts=sample_data['render_image'][:self.cfg.logger.image_monitor.samples_per_log].cpu(),
             )
 

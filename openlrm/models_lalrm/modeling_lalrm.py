@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from .flash_attn_transformer import FlashTransformerEncoderLayer,FlashTransformerEncoder
 
 class LaLRM(nn.Module):
     """
@@ -23,10 +23,11 @@ class LaLRM(nn.Module):
         num_transformer_layers=24,   # Transformer层数
         d_model=1024,                # Transformer隐藏维度
         n_head=16,                   # Multi-head Attention的head数
-        dim_feedforward=4096         # FFN的维度
+        dim_feedforward=4096,        # FFN的维度
+        use_flash_attn=True,       # 是否使用FlashAttention
     ):
         super().__init__()
-
+        self.d_model = d_model
         # 1. 视频潜表示：Conv2D 做 spatial patchify
         #   in_c=16, out_c=1024, kernel=2, stride=2
         self.video_conv = nn.Conv2d(
@@ -38,9 +39,9 @@ class LaLRM(nn.Module):
         self.video_ln = nn.LayerNorm(d_model)
 
         # 2. 相机嵌入：Conv3D 做时空 patchify
-        #   in_c=16, out_c=1024, kernel=(4,16,16), stride=(4,16,16), pad=(2,0,0)
+        #   in_c=6, out_c=1024, kernel=(4,16,16), stride=(4,16,16), pad=(2,0,0)
         self.camera_conv = nn.Conv3d(
-            in_channels=16, 
+            in_channels=6, 
             out_channels=d_model, 
             kernel_size=(4,16,16),
             stride=(4,16,16),
@@ -51,19 +52,34 @@ class LaLRM(nn.Module):
         # 3. 拼接后 (2048 -> 1024) 的线性映射
         self.merge_linear = nn.Linear(d_model * 2, d_model)
 
-        # 4. Transformer 编码器，24层、隐藏维度1024，可视需要替换成FlashAttention
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model, 
-            nhead=n_head, 
-            dim_feedforward=dim_feedforward, 
-            batch_first=True
-        )
-        self.transformer = nn.TransformerEncoder(
-            encoder_layer, 
-            num_layers=num_transformer_layers
-        )
+        if use_flash_attn:
+            # 使用 FlashAttention 替代 nn.TransformerEncoderLayer
+            encoder_layer = FlashTransformerEncoderLayer(
+                d_model=d_model, 
+                nhead=n_head, 
+                dim_feedforward=dim_feedforward, 
+                batch_first=True
+            )
+            self.transformer = FlashTransformerEncoder(
+                encoder_layer, 
+                num_layers=num_transformer_layers
+            )
+        else:
+            # 4. Transformer 编码器，24层、隐藏维度1024，可视需要替换成FlashAttention
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=d_model, 
+                nhead=n_head, 
+                dim_feedforward=dim_feedforward, 
+                batch_first=True
+            )
+            # 使用默认的 nn.TransformerEncoderLayer
+            self.transformer = nn.TransformerEncoder(
+                encoder_layer, 
+                num_layers=num_transformer_layers
+            )
 
         # 5. 3D 反卷积 (in_c=1024, out_c=12, kernel=(5,8,8), stride=upsample_st, pad=(2,0,0))
+        # We'll rely on self.flash_blocks instead of self.transformer to do attention.
         self.decode_3d = nn.ConvTranspose3d(
             in_channels=d_model, 
             out_channels=12,
@@ -111,7 +127,7 @@ class LaLRM(nn.Module):
         out = self.merge_linear(out)  # => (B, n, d_model)
 
         # 送入 Transformer
-        out = self.transformer(out)   # => (B, n, d_model)
+        out = self.transformer(out)
 
         # reshape 成 (B, d_model, T_c', H_c', W_c')
         # 注意：n == T_c'*H_c'*W_c'，需和 camera_conv 输出匹配
@@ -120,7 +136,7 @@ class LaLRM(nn.Module):
         out = out.permute(0,2,1).contiguous()
         # 假设下游形状固定为 (B, 1024, 13,30,45)
         # 若做通用实现可在外部传参或者根据 camera_embed 动态计算
-        out = out.view(B, 1024, 13, 30, 45)
+        out = out.view(B, self.d_model, 13, 30, 45)
 
         # 3D 反卷积 => (B,12, T_out, H_out, W_out)
         out = self.decode_3d(out)

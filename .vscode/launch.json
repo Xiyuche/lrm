@@ -9,7 +9,8 @@
         "module": "openlrm.launch",
         "args": [
           "train.lrm",
-          "--config", "./configs/train-sample.yaml"
+          "--config", "./configs/train-sample.yaml",
+          "--config_file", "./configs/accelerate-train.yaml"
         ],
         "console": "integratedTerminal"
       }
