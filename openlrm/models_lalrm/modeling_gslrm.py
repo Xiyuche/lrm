@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from gsplat import rasterization
 from .flash_attn_transformer import FlashTransformerEncoderLayer, FlashTransformerEncoder
 
 class LaLRM(nn.Module):
@@ -19,6 +18,7 @@ class LaLRM(nn.Module):
     参数说明（可根据需要在构造函数中灵活设置）:
       upsample_st: 3D 转置卷积的 stride，区分低分辨率预训练或高分辨率微调 (例如 (4,16,16) 或 (4,8,8))
     """
+
     def __init__(
         self,
         upsample_st=(4, 8, 8),       # 反卷积的stride
@@ -207,130 +207,26 @@ class LaLRM(nn.Module):
         out = self.final_act(out)
 
         # => (B, T_out, H_out, W_out, 12)
-        gaussian_points = out.permute(0, 2, 3, 4, 1).contiguous()
-        
-        # 拆分最后一维为 distance, rgb, scaling, rotation, opacity
-        distance, rgb, scaling, rotation, opacity = gaussian_points.split([1, 3, 3, 4, 1], dim=-1)
+        gaussian_points = out.permute(0,2,3,4,1).contiguous()
+        return gaussian_points
 
-        # 将 ray distance 转换为 xyz
-        w = torch.sigmoid(distance)
-        near, far = 0.1, 10.0  # 假设的 near 和 far 平面距离
-        xyz = o + d * (near * (1 - w) + far * w)
-
-        # 对 scaling 和 rotation 进行处理
-        scaling = torch.clamp(torch.exp(scaling - 2.3), max=0.3)
-        rotation = rotation / rotation.norm(dim=-1, keepdim=True)
-        opacity = torch.sigmoid(opacity - 2.0)
-
-        # 返回 xyz, rgb, scaling, rotation, opacity
-        return xyz, rgb, scaling, rotation, opacity
-
-
-    def render_in_target_camera(
-        self,
-        means3D:       torch.Tensor,  # [B, N, 3]
-        rotations:     torch.Tensor,  # [B, N, 4]
-        scales:        torch.Tensor,  # [B, N, 3]
-        opacities:     torch.Tensor,  # [B, N, 1]
-        colors_precomp:torch.Tensor,  # [B, N, C], 如 RGB=3 或 SH展开后更多通道
-        K:             torch.Tensor,  # [B,   4, 4], 每个batch对应一个相机内参矩阵(含fx,fy,cx,cy等)
-        RT:            torch.Tensor,  # [B,   4, 4], 每个batch对应一个旋转平移外参
-        width:         int   = 256,
-        height:        int   = 256,
-        sh_degree:     int   = 0,     # 设为0表示无Spherical Harmonics或仅RGB
-        near_plane:    float = 0.00001,
-        radius_clip:   float = 0.1,
-        render_mode:   str   = "RGB+D"
-    ):
+    def forward_render(self, gauss_points: torch.Tensor, render_camera_embd=None):
         """
-        使用 gsplat.rendering.rasterization 在指定相机参数 (K, RT) 下进行批量渲染，
-        返回 render_colors, render_alphas, render_depths (以及其他你需要的中间结果).
+        从 gauss_points + render_camera_embd 得到最终的 render_results
+        shape 示例:
+          gauss_points: [B, T_out, H_out, W_out, 12]
+          render_camera_embd: [B, T_r, H_r, W_r, C_r], 仅示例
 
-        参数:
-        means3D:       (B, N, 3)  高斯中心/Mean
-        rotations:     (B, N, 4)  高斯旋转的四元数
-        scales:        (B, N, 3)  高斯缩放/Scale
-        opacities:     (B, N, 1)  每个高斯的透明度
-        colors_precomp:(B, N, C)  颜色或其他SH通道 (若 C=3 则仅RGB)
-        K:             (B, 4, 4)  相机内参矩阵 (fx, fy, cx, cy 在对角 & .[0,2])
-        RT:            (B, 4, 4)  相机外参矩阵
-        width, height: 渲染图像分辨率
-        sh_degree:     若为0则无SH展开，若>0则表示颜色通道是Spherical Harmonics
-        near_plane:    最近裁剪平面
-        render_mode:   默认为 \"RGB+D\"，可输出颜色+深度
-        radius_clip:   光栅化时对高斯半径的截断
-
-        返回:
-        dict，包含三张图:
-            \"image\" -> (B, 3, H, W)
-            \"alpha\" -> (B, 1, H, W)
-            \"depth\" -> (B, 1, H, W)
+        可根据需要替换成真正的渲染操作
         """
-
-        # 注意：如果 colors_precomp.shape[-1]==3，可视为普通RGB，否则视为多通道(例如 SH展开)
-        # 因为我们在调用rasterization时可以一次性传入所有batch，下面直接传 B维度
-
-        # (B, 4, 4) => 取 [:, :3, :3] 得到 (B, 3, 3) 旋转、保留 fx,fy,cx,cy
-        # 也可以不改，取 K[:, :3, :3] 传给Ks
-        # 同理 RT => viewmats = RT.inverse()
-        # 如果 batch_size>1，可以一次性把K, RT 全部传进去
-
-        # squeeze(-1): (B, N, 1)->(B, N)
-        opacities_squeezed = opacities.squeeze(dim=-1)
-
-        # 直接一次性处理:
-        render_colors, render_alphas, meta = rasterization(
-            means       = means3D,             # (B, N, 3)
-            quats       = rotations,           # (B, N, 4)
-            scales      = scales,              # (B, N, 3)
-            opacities   = opacities_squeezed,  # (B, N)
-            colors      = colors_precomp,      # (B, N, C), C=3 或 (SH相关)
-            sh_degree   = sh_degree,           # Spherical Harmonics次数
-            viewmats    = RT.inverse(),        # (B, 4, 4) => inverse() => (B, 4, 4)
-            Ks          = K[:, :3, :3],        # (B, 3, 3)
-            width       = width,
-            height      = height,
-            near_plane  = near_plane,
-            render_mode = render_mode,
-            radius_clip = radius_clip
-            # 可能还可指定 rasterize_mode="antialiased" 等
-        )
-        # 默认 rasterization 输出:
-        #  render_colors: (B, H, W, channels=4?) 取决于 render_mode
-        #  render_alphas: (B, H, W, 4) 也可能是(可与render_colors匹配)
-        #  meta: 其他可能的信息
-
-        # 下面演示如何解析: 例如在 \"RGB+D\" 模式下 render_colors[..., :3] 是RGB, [:, :, 3] 是Depth
-        # alpha 通常在 render_alphas[..., 3] or 取 single-channel
-        # 你也可以根据 rasterization 的实际输出格式做调整
-
-        # permute => (B, channel, H, W)
-        # 拿到 RGBA(D) 第4维通道
-        # 例如 shape: (B, H, W, 4) => permute => (B, 4, H, W)
-        render_colors_4d = render_colors.permute(0, 3, 1, 2).contiguous()  # => (B, 4, H, W)
-        # 取前三通道 = RGB
-        rendered_rgb   = render_colors_4d[:, 0:3, :, :]  # (B, 3, H, W)
-        # 取第四通道 = Depth or A 需看render_mode
-        rendered_depth = render_colors_4d[:, 3:4, :, :]  # (B, 1, H, W)
-
-        # alpha 类似 => (B, H, W, 4) => permute => (B, 4, H, W)
-        # 具体看 rasterization 的 actual shape
-        render_alphas_4d = render_alphas.permute(0, 3, 1, 2).contiguous()  # => (B, 4, H, W)
-        # 这里假定 alpha 在第0通道或最后一个通道:
-        rendered_alpha = render_alphas_4d[:, 0:1, :, :]  # or [:, 3:4, :, :]
-
-        # 返回一个字典
-        return {
-            "image": rendered_rgb,      # (B, 3, H, W)
-            "alpha": rendered_alpha,    # (B, 1, H, W)
-            "depth": rendered_depth,    # (B, 1, H, W)
-            "meta":  meta               # optional
-        }
+        # 这里仍保持示例逻辑:
+        render_results = gauss_points.mean(dim=-1, keepdim=True)  # 简单示例
+        return render_results
 
     def forward(self,
                 video_latent: torch.Tensor,
                 camera_embed:  torch.Tensor,
-                target_camera=None,
+                render_camera_embd=None,
                 extrinsics=None,
                 intrinsics=None):
         """
@@ -344,22 +240,13 @@ class LaLRM(nn.Module):
           camera_embed:   [B, T_c, H_c, W_c, C_c]
           extrinsics:     [B, N, 4, 4], optional
           intrinsics:     [B, N, 4], optional
-     """
-
-        xyz, rgb, scaling, rotation, opacity = self.forward_gaussian(
+        """
+        # 1) 生成高斯表征
+        gauss_points = self.forward_gaussian(
             video_latent, camera_embed,
             extrinsics=extrinsics, intrinsics=intrinsics
         )
 
-
-        render_results = self.render_in_target_camera(
-            means3D=xyz,
-            rotations=rotation,
-            scales=scaling,
-            opacities=opacity,
-            K=target_camera[:, :3, :3],
-            RT=target_camera,
-            width=self.W_cam, height=self.H_cam
-        )
-
+        # 2) 可选的渲染步骤
+        render_results = self.forward_render(gauss_points, render_camera_embd)
         return render_results

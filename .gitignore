@@ -57,3 +57,6 @@ dataset/Objaverse/rendered_backup
 
 #ignore experiments
 exps
+
+# Ignore History files
+.history
