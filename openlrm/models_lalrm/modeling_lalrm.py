@@ -148,7 +148,7 @@ class LaLRM(nn.Module):
 
         return o, d
 
-    def forward_gaussian(self, video_latent: torch.Tensor, camera_embed: torch.Tensor,
+    def forward_gaussian(self, video_latent: torch.Tensor,
                          extrinsics=None, intrinsics=None):
         """
         从 video_latent + camera_embed 中抽取 2D/3D patch, 拼接后送入 Transformer，
@@ -167,14 +167,17 @@ class LaLRM(nn.Module):
         """
         B, T_v, H_v, W_v, C_v = video_latent.shape
 
-        # 如果需要用相机射线与图像合并:
-        if (extrinsics is not None) and (intrinsics is not None):
-            # o, d => [B, N, H_v, W_v, 3]  (这里 N 通常与 T_v 对应)
-            o, d = self.generate_rays_from_camera(extrinsics, intrinsics, H_v, W_v)
-            # Cross => (B, N, H_v, W_v, 3)
-            cross_od = torch.cross(o, d, dim=-1)
-            # 简单拼接 => shape [B, T_v, H_v, W_v, C_v+6]
-            video_latent = torch.cat([video_latent, o, cross_od], dim=-1)
+        # 计算相机射线
+        # o, d => [B, N, H_v, W_v, 3]  (这里 N 通常与 T_v 对应)
+        o, d = self.generate_rays_from_camera(extrinsics, intrinsics, H_v, W_v)
+        # Cross => (B, N, H_v, W_v, 3)
+        cross_od = torch.cross(o, d, dim=-1)
+        # Get plücker embedding
+        camera_embd = torch.cat([o, cross_od], dim=-1)  # [B, N, H_v, W_v, 9]
+
+
+        # 简单拼接 => shape [B, T_v, H_v, W_v, C_v+6]
+        video_latent = torch.cat([video_latent, o, cross_od], dim=-1)
 
         # (B, T_v, H_v, W_v, C_v+...) => permute+view => (B*T_v, C_in, H_v, W_v)
         v_in = video_latent.permute(0,1,4,2,3).contiguous().view(B*T_v, -1, H_v, W_v)
@@ -184,12 +187,6 @@ class LaLRM(nn.Module):
         N_spatial_v = (H_v // 2) * (W_v // 2)
         v_out = v_out.view(B, T_v * N_spatial_v, -1)  # => (B, n_v, d_model)
 
-        # camera_embed 同理 => (B, d_model, T_c', H_c', W_c')
-        B_c, T_c, H_c, W_c, C_c = camera_embed.shape
-        c_in = camera_embed.permute(0,4,1,2,3).contiguous()
-        c_out = self.camera_conv(c_in)  # => (B, d_model, T_c', H_c', W_c')
-        c_out = c_out.flatten(2).permute(0,2,1).contiguous()  # => (B, n_c, d_model)
-        c_out = self.camera_ln(c_out)
 
         # 拼接 => (B, n_v + n_c, 2*d_model) => 线性映射 => (B, n_v + n_c, d_model)
         out = torch.cat([v_out, c_out], dim=-1)
@@ -329,7 +326,6 @@ class LaLRM(nn.Module):
 
     def forward(self,
                 video_latent: torch.Tensor,
-                camera_embed:  torch.Tensor,
                 target_camera=None,
                 extrinsics=None,
                 intrinsics=None):
@@ -342,12 +338,12 @@ class LaLRM(nn.Module):
         输入:
           video_latent:  [B, T_v, H_v, W_v, C_v]
           camera_embed:   [B, T_c, H_c, W_c, C_c]
-          extrinsics:     [B, N, 4, 4], optional
-          intrinsics:     [B, N, 4], optional
+          extrinsics:     [B, N, 4, 4]
+          intrinsics:     [B, N, 4]
      """
 
         xyz, rgb, scaling, rotation, opacity = self.forward_gaussian(
-            video_latent, camera_embed,
+            video_latent,
             extrinsics=extrinsics, intrinsics=intrinsics
         )
 
@@ -357,6 +353,7 @@ class LaLRM(nn.Module):
             rotations=rotation,
             scales=scaling,
             opacities=opacity,
+            colors_precomp=rgb,
             K=target_camera[:, :3, :3],
             RT=target_camera,
             width=self.W_cam, height=self.H_cam

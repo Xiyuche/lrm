@@ -175,12 +175,13 @@ class LRMTrainer(Trainer):
         N, M, C, H, W = render_image.shape
         B = source_image.shape[0]
         source_image_fake = torch.randn(B, 13, 60, 90, 16, device=self.device, dtype=source_image.dtype)
-        source_camera_fake = torch.randn(B, 49, 480, 720, 6, device=self.device, dtype=source_camera.dtype)
+        source_camera_intrinsic = torch.randn(B,49, 3, 3, device=self.device, dtype=source_camera.dtype)
+        source_camera_extrinsic = torch.randn(B, 49, 3, 4, device=self.device, dtype=source_camera.dtype)
 
         # forward
         gaussians = self.model(
             video_latent=source_image_fake,
-            camera_embed=source_camera_fake,
+            
         )
         outputs = {
             'gaussians': gaussians
